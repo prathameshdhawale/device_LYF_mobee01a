@@ -636,7 +636,7 @@ const QCameraParameters::QCameraMap<cam_antibanding_mode_type>
 const QCameraParameters::QCameraMap<cam_iso_mode_type>
         QCameraParameters::ISO_MODES_MAP[] = {
     { ISO_AUTO,  CAM_ISO_MODE_AUTO },
-    { ISO_HJR,   CAM_ISO_MODE_DEBLUR },
+    { ISO_HJR,   CAM_ISO_MODE_AUTO }, // ISO DEBLUR is broken in the backend
     { ISO_100,   CAM_ISO_MODE_100 },
     { ISO_200,   CAM_ISO_MODE_200 },
     { ISO_400,   CAM_ISO_MODE_400 },
@@ -820,12 +820,15 @@ QCameraParameters::QCameraParameters()
       m_bIsLowMemoryDevice(false),
       m_bLowPowerMode(false),
       m_bIsLongshotLimited(false),
-      m_nMaxLongshotNum(-1)
+      m_nMaxLongshotNum(-1),
+      mFocusState(CAM_AF_NOT_FOCUSED)
 {
     char value[PROPERTY_VALUE_MAX];
+#ifndef DISABLE_DEBUG_LOG
     // TODO: may move to parameter instead of sysprop
     property_get("persist.debug.sf.showfps", value, "0");
     m_bDebugFps = atoi(value) > 0 ? true : false;
+#endif
     m_bReleaseTorchCamera = false;
     m_pTorch = NULL;
 
@@ -917,7 +920,8 @@ QCameraParameters::QCameraParameters(const String8 &params)
     m_bIsLowMemoryDevice(false),
     m_bLowPowerMode(false),
     m_bIsLongshotLimited(false),
-    m_nMaxLongshotNum(-1)
+    m_nMaxLongshotNum(-1),
+    mFocusState(CAM_AF_NOT_FOCUSED)
 {
     memset(&m_LiveSnapshotSize, 0, sizeof(m_LiveSnapshotSize));
     m_pTorch = NULL;
@@ -2988,6 +2992,7 @@ int32_t QCameraParameters::setMCEValue(const QCameraParameters& params)
  *==========================================================================*/
 int32_t QCameraParameters::setDISValue(const QCameraParameters& params)
 {
+/*
     const char *str = params.get(KEY_QC_DIS);
     const char *prev_str = get(KEY_QC_DIS);
     if (str != NULL) {
@@ -2996,6 +3001,7 @@ int32_t QCameraParameters::setDISValue(const QCameraParameters& params)
             return setDISValue(str);
         }
     }
+*/
     return NO_ERROR;
 }
 
@@ -4591,7 +4597,7 @@ int32_t QCameraParameters::initDefaultParameters()
     set(KEY_QC_RAW_PICUTRE_SIZE, raw_size_str);
 
     //set default jpeg quality and thumbnail quality
-    set(KEY_JPEG_QUALITY, 85);
+    set(KEY_JPEG_QUALITY, 95);
     set(KEY_JPEG_THUMBNAIL_QUALITY, 85);
 
     // Set FPS ranges
@@ -5030,9 +5036,9 @@ int32_t QCameraParameters::initDefaultParameters()
     set(KEY_QC_SUPPORTED_MEM_COLOR_ENHANCE_MODES, enableDisableValues);
     setMCEValue(VALUE_ENABLE);
 
-    // Set DIS
+    /* Set DIS
     set(KEY_QC_SUPPORTED_DIS_MODES, enableDisableValues);
-    setDISValue(VALUE_DISABLE);
+    setDISValue(VALUE_DISABLE); */
 
     // Set Histogram
     set(KEY_QC_SUPPORTED_HISTOGRAM_MODES,
@@ -5453,11 +5459,6 @@ int32_t QCameraParameters::setPreviewFpsRange(int min_fps,
 
     CDBG("%s: E minFps = %d, maxFps = %d , vid minFps = %d, vid maxFps = %d",
                 __func__, min_fps, max_fps, vid_min_fps, vid_max_fps);
-
-    if (max_fps >= 24000 && min_fps == max_fps) {
-        CDBG_HIGH("min_fps %d same as max_fps %d, setting min_fps to 7000", min_fps, max_fps);
-        min_fps = 7000;
-    }
 
     if(fixedFpsValue != 0) {
       min_fps = max_fps = vid_min_fps = vid_max_fps = (int)fixedFpsValue*1000;
@@ -7851,6 +7852,10 @@ int32_t QCameraParameters::updateFlash(bool commitSettings)
 
     if (value != mFlashDaemonValue) {
 
+        if (isAFRunning()) {
+            CDBG("%s: AF is running, cancel AF before changing flash mode ", __func__);
+            m_pCamOpsTbl->ops->cancel_auto_focus(m_pCamOpsTbl->camera_handle);
+        }
         ALOGV("%s: Setting Flash value %d", __func__, value);
         rc = AddSetParmEntryToBatch(m_pParamBuf,
                                       CAM_INTF_PARM_LED_MODE,
@@ -8781,7 +8786,7 @@ uint32_t QCameraParameters::getJpegQuality()
 {
     int quality = getInt(KEY_JPEG_QUALITY);
     if (quality < 0) {
-        quality = 85; // set to default quality value
+        quality = 95; // set to default quality value
     }
     return (uint32_t)quality;
 }
@@ -10703,6 +10708,25 @@ uint8_t QCameraParameters::getLongshotStages()
         numStages = propStages;
     }
     return numStages;
+}
+
+/*===========================================================================
+* FUNCTION   : isAFRunning
+*
+* DESCRIPTION: if AF is in progress while in Auto/Macro focus modes
+*
+* PARAMETERS : none
+*
+* RETURN     : true: AF in progress
+*              false: AF not in progress
+*==========================================================================*/
+bool QCameraParameters::isAFRunning()
+{
+    bool isAFInProgress = ((mFocusState == CAM_AF_SCANNING) &&
+                          ((mFocusMode == CAM_FOCUS_MODE_AUTO) ||
+                           (mFocusMode == CAM_FOCUS_MODE_MACRO)));
+
+    return isAFInProgress;
 }
 
 }; // namespace qcamera
